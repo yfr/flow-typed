@@ -1,16 +1,25 @@
 {
   "parser": "babel-eslint",
-  "env": { 
+  "env": {
     "es6": true
   },
   "plugins": [
-    "flow-vars"
+    "flowtype",
+    "prettier"
+  ],
+  "extends": [
+    "plugin:flowtype/recommended"
   ],
   "globals": {
   },
   "rules": {
-    "flow-vars/define-flow-type": 1,
-    "flow-vars/use-flow-type": 1,
+    "prettier/prettier": [
+      "error",
+      { "singleQuote": true,
+        "bracketSpacing": false,
+        "trailingComma": "all",
+      }
+    ],
     "eqeqeq": [2, "smart"],
     "semi": 2,
     "no-unused-vars": ["error", {

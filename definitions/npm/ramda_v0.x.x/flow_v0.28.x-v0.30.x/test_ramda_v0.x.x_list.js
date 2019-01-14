@@ -49,6 +49,8 @@ const str: string = 'hello world'
   const findxs6:number = _.findLastIndex(_.propEq('a', 2), os)
   const findxs7:number = _.findLastIndex(_.propEq('a', 4))(os)
 
+  const forEachObj = _.forEachObjIndexed((value, key) => {}, {x: 1, y: 2})
+
   const s: Array<number> = filter(x => x > 1, [ 1, 2 ])
   const s1: Array<string> = _.filter(x => x === '2', [ '2', '3' ])
   const s3: {[key: string]: string} = _.filter(x => x === '2', { a:'2', b:'3' })
@@ -101,6 +103,10 @@ const str: string = 'hello world'
   const lasti: number = _.lastIndexOf(3, [ -1,3,3,0,1,2,3,4 ])
 
   const mapxs: Array<number>= _.map(x => x + 1, ns)
+
+  const someObj: { a: string, b: number } = { a: 'a', b: 2 }
+  const someMap: { [string]: { a: string, b: number } } = { so: someObj }
+  const mapObj: { [string]: string } = _.map((x: { a: string, b: number }): string => x.a)(someMap)
 
   const functor = {
     x: 1,

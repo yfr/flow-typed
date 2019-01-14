@@ -31,7 +31,8 @@ declare interface PapaParse$ParseConfig {
     worker?: boolean,
     comments?: boolean,
     download?: boolean,
-    skipEmptyLines?: boolean,
+    // + is required see https://github.com/facebook/flow/issues/3876
+    +skipEmptyLines?: boolean | 'greedy',
     fastMode?: boolean,
     withCredentials?: boolean,
     step?: Function,
@@ -42,16 +43,16 @@ declare interface PapaParse$ParseConfig {
 }
 
 declare interface PapaParse$UnparseConfig {
-    quotes: boolean,
-    quoteChar: string,
-    delimiter: string,
-    header: boolean,
-    newline: string
+    quotes?: boolean,
+    quoteChar?: string,
+    delimiter?: string,
+    header?: boolean,
+    newline?: string
 }
 
 declare interface PapaParse$UnparseObject {
     fields: Array<any>,
-    data: string | Array<any>
+    +data: string | Array<any>
 }
 
 declare interface PapaParse$ParseError {

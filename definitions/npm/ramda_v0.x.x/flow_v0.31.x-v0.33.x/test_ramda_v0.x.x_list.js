@@ -56,6 +56,8 @@ const str: string = 'hello world'
   const s7: number = _.findIndex(x => x === '2', { a:'1', b:'2' })
   const forEachxs = _.forEach(x => console.log(x), ns)
 
+  const forEachObj = _.forEachObjIndexed((value, key) => {}, {x: 1, y: 2})
+
   const groupedBy: {[k: string]: Array<number>} = _.groupBy(x => x > 1 ? 'more' : 'less' , ns)
 
   const groupedWith: Array<Array<number>> = _.groupWith(x => x > 1, ns)
@@ -92,6 +94,10 @@ const str: string = 'hello world'
   const lasti: number = _.lastIndexOf(3, [ -1,3,3,0,1,2,3,4 ])
 
   const mapxs: Array<number>= _.map(x => x + 1, ns)
+
+  const someObj: { a: string, b: number } = { a: 'a', b: 2 }
+  const someMap: { [string]: { a: string, b: number } } = { so: someObj }
+  const mapObj: { [string]: string } = _.map((x: { a: string, b: number }): string => x.a)(someMap)
 
   const functor = {
     x: 1,

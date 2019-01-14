@@ -1,11 +1,11 @@
-#!/bin/bash
-#set -o errexit
+#!/bin/sh
+#set -e
 
 cd definitions && \
-#npm install && \
-#npm test && \
+yarn install && \
+yarn test && \
 cd ../cli && \
-npm install && \
-./node_modules/.bin/flow && \
+yarn && \
+yarn run flow && \
 node dist/cli.js validate-defs ../definitions && \
 node dist/cli.js run-tests --onlyChanged

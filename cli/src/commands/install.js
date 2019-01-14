@@ -1,126 +1,141 @@
 // @flow
 
-import {
-  signCodeStream,
-} from "../lib/codeSign";
+import {signCodeStream} from '../lib/codeSign';
 
-import {
-  copyFile,
-  mkdirp,
-} from "../lib/fileUtils";
+import {copyFile, mkdirp} from '../lib/fileUtils';
 
-import {
-  findFlowRoot,
-} from "../lib/flowProjectUtils";
+import {findFlowRoot} from '../lib/flowProjectUtils';
 
 import {
   toSemverString as flowVersionToSemver,
   parseFlowSpecificVer,
-} from "../lib/flowVersion";
-import type {
-  FlowVersion,
-} from "../lib/flowVersion";
+} from '../lib/flowVersion';
+import type {FlowVersion} from '../lib/flowVersion';
 
-import {
-  fs,
-  path,
-} from "../lib/node";
+import {fs, path} from '../lib/node';
 
 import {
   findNpmLibDef,
   getInstalledNpmLibDefs,
   getNpmLibDefVersionHash,
-} from "../lib/npm/npmLibDefs";
-import type {
-  NpmLibDef,
-} from "../lib/npm/npmLibDefs";
+  getScopedPackageName,
+  type NpmLibDef,
+} from '../lib/npm/npmLibDefs';
 
 import {
   findFlowSpecificVer,
   getPackageJsonData,
   getPackageJsonDependencies,
-} from "../lib/npm/npmProjectUtils";
+} from '../lib/npm/npmProjectUtils';
 
 import {
   getCacheRepoDir,
-} from "../lib/cacheRepoUtils";
+  _setCustomCacheDir as setCustomCacheDir,
+} from '../lib/cacheRepoUtils';
 
-import {
-  getRangeLowerBound,
-} from "../lib/semver";
+import {getRangeLowerBound} from '../lib/semver';
 
-import
-  colors
-from "colors/safe";
+import colors from 'colors/safe';
 
-import
-  semver
-from "semver";
+import semver from 'semver';
 
-import {
-  createStub,
-  pkgHasFlowFiles,
-} from "../lib/stubUtils";
+import {createStub, pkgHasFlowFiles} from '../lib/stubUtils';
 
-import
-  typeof Yargs
-from "yargs";
+import typeof Yargs from 'yargs';
 
-export const name = "install";
-export const description = "Installs libdefs into the ./flow-typed directory";
+export const name = 'install';
+export const description = 'Installs libdefs into the ./flow-typed directory';
 export type Args = {
   _: Array<string>,
-  flowVersion?: string,
-  overwrite: boolean,
-  skip: boolean,
-  verbose: bool,
-  libdefDir?: string,
-  packageDir?: string,
+  flowVersion?: mixed, // string
+  overwrite: mixed, // boolean
+  skip: mixed, // boolean
+  verbose: mixed, // boolean
+  libdefDir?: mixed, // string
+  cacheDir?: mixed, // string
+  packageDir?: mixed, // string
+  ignoreDeps?: mixed, // Array<string>
+  rootDir?: mixed, // string
 };
 export function setup(yargs: Yargs) {
-  return yargs
-    .usage(`$0 ${name} - ${description}`)
-    .options({
-      flowVersion: {
-        alias: 'f',
-        describe: "The Flow version that fetched libdefs must be compatible " +
-                  "with",
-        type: "string",
-      },
-      verbose: {
-        describe: "Print additional, verbose info while installing libdefs",
-        type: "boolean",
-        demand: false,
-      },
-      skip: {
-        alias: 's',
-        describe: 'Do not generate stubs for missing libdefs',
-        type: 'boolean',
-        demand: false,
-      },
-      libdefDir: {
-        alias: 'l',
-        describe: 'Use a custom directory to install libdefs',
-        type: 'string',
-        demand: false,
-      },
-      packageDir: {
-        alias: 'p',
-        describe: "The relative path of package.json where flow-bin is installed",
-        type: "string",
-      },
-    });
-};
+  return yargs.usage(`$0 ${name} - ${description}`).options({
+    flowVersion: {
+      alias: 'f',
+      describe:
+        'The Flow version that fetched libdefs must be compatible ' + 'with',
+      type: 'string',
+    },
+    verbose: {
+      describe: 'Print additional, verbose info while installing libdefs',
+      type: 'boolean',
+      demand: false,
+    },
+    skip: {
+      alias: 's',
+      describe: 'Do not generate stubs for missing libdefs',
+      type: 'boolean',
+      demand: false,
+    },
+    libdefDir: {
+      alias: 'l',
+      describe: 'Use a custom directory to install libdefs',
+      type: 'string',
+      demand: false,
+    },
+    cacheDir: {
+      alias: 'c',
+      describe:
+        'Directory (absolute or relative path, ~ is not supported) to store cache of libdefs',
+      type: 'string',
+      demand: false,
+    },
+    packageDir: {
+      alias: 'p',
+      describe: 'The relative path of package.json where flow-bin is installed',
+      type: 'string',
+    },
+    ignoreDeps: {
+      alias: 'i',
+      describe: 'Dependency categories to ignore when installing definitions',
+      type: 'array',
+    },
+    rootDir: {
+      alias: 'r',
+      describe: 'Directory of .flowconfig relative to node_modules',
+      type: 'string',
+    },
+  });
+}
 export async function run(args: Args) {
-  const cwd = process.cwd();
-  const packageDir = args.packageDir ? path.resolve(args.packageDir) : cwd;
+  const cwd =
+    typeof args.rootDir === 'string'
+      ? path.resolve(args.rootDir)
+      : process.cwd();
+  const packageDir =
+    typeof args.packageDir === 'string' ? path.resolve(args.packageDir) : cwd;
   const flowVersion = await determineFlowVersion(packageDir, args.flowVersion);
-  const libdefDir = args.libdefDir || 'flow-typed';
+  const libdefDir =
+    typeof args.libdefDir === 'string' ? args.libdefDir : 'flow-typed';
   const explicitLibDefs = args._.slice(1);
+  if (args.ignoreDeps !== undefined && !Array.isArray(args.ignoreDeps)) {
+    throw new Error('ignoreDeps is not array');
+  }
+  const ignoreDeps = (args.ignoreDeps || []).map(dep => {
+    if (typeof dep !== 'string') {
+      throw new Error('ignoreDeps should be array of strings');
+    }
+    return dep;
+  });
 
   const coreLibDefResult = await installCoreLibDefs();
   if (coreLibDefResult !== 0) {
     return coreLibDefResult;
+  }
+
+  if (args.cacheDir) {
+    const cacheDir = path.resolve(String(args.cacheDir));
+    console.log('• Setting cache dir', cacheDir);
+    setCustomCacheDir(cacheDir);
   }
 
   const npmLibDefResult = await installNpmLibDefs({
@@ -128,23 +143,22 @@ export async function run(args: Args) {
     flowVersion,
     explicitLibDefs,
     libdefDir: libdefDir,
-    verbose: args.verbose,
-    overwrite: args.overwrite,
-    skip: args.skip,
+    verbose: Boolean(args.verbose),
+    overwrite: Boolean(args.overwrite),
+    skip: Boolean(args.skip),
+    ignoreDeps: ignoreDeps,
   });
   if (npmLibDefResult !== 0) {
     return npmLibDefResult;
   }
   return 0;
-};
+}
 
-async function determineFlowVersion(cwd: string, flowVersionArg?: string) {
-  if (flowVersionArg != null) {
+async function determineFlowVersion(cwd: string, flowVersionArg?: mixed) {
+  if (flowVersionArg && typeof flowVersionArg === 'string') {
     // Be permissive if the prefix 'v' is left off
     let flowVersionStr =
-      flowVersionArg[0] === 'v'
-      ? flowVersionArg
-      : `v${flowVersionArg}`;
+      flowVersionArg[0] === 'v' ? flowVersionArg : `v${flowVersionArg}`;
 
     if (/^v[0-9]+\.[0-9]+$/.test(flowVersionStr)) {
       flowVersionStr = `${flowVersionStr}.0`;
@@ -152,12 +166,12 @@ async function determineFlowVersion(cwd: string, flowVersionArg?: string) {
 
     return {
       kind: 'specific',
-      ver: parseFlowSpecificVer(flowVersionStr, flowVersionArg)
+      ver: parseFlowSpecificVer(flowVersionStr),
     };
   } else {
     return {
       kind: 'specific',
-      ver: await findFlowSpecificVer(cwd)
+      ver: await findFlowSpecificVer(cwd),
     };
   }
 }
@@ -167,10 +181,7 @@ async function installCoreLibDefs(): Promise<number> {
   return 0;
 }
 
-const FLOW_BUILT_IN_NPM_LIBS = [
-  'react',
-  'react-dom',
-];
+const FLOW_BUILT_IN_NPM_LIBS = ['react', 'react-dom'];
 type installNpmLibDefsArgs = {|
   cwd: string,
   flowVersion: FlowVersion,
@@ -179,6 +190,7 @@ type installNpmLibDefsArgs = {|
   verbose: boolean,
   overwrite: boolean,
   skip: boolean,
+  ignoreDeps: Array<string>,
 |};
 async function installNpmLibDefs({
   cwd,
@@ -188,13 +200,14 @@ async function installNpmLibDefs({
   verbose,
   overwrite,
   skip,
+  ignoreDeps,
 }: installNpmLibDefsArgs): Promise<number> {
   const flowProjectRoot = await findFlowRoot(cwd);
   if (flowProjectRoot === null) {
     console.error(
-      "Error: Unable to find a flow project in the current dir or any of " +
-      "it's parent dirs!\n" +
-      "Please run this command from within a Flow project."
+      'Error: Unable to find a flow project in the current dir or any of ' +
+        "it's parent dirs!\n" +
+        'Please run this command from within a Flow project.',
     );
     return 1;
   }
@@ -208,29 +221,37 @@ async function installNpmLibDefs({
       const term = explicitLibDefs[i];
       const termMatches = term.match(/(@[^@\/]+\/)?([^@]+)@(.+)/);
       if (termMatches == null) {
-        console.error(
-          "ERROR: Please specify npm package names in the format of `foo@1.2.3`"
-        );
-        return 1;
+        const pkgJsonData = await getPackageJsonData(cwd);
+        const pkgJsonDeps = getPackageJsonDependencies(pkgJsonData, []);
+        const packageVersion = pkgJsonDeps[term];
+        if (packageVersion) {
+          libdefsToSearchFor.set(term, packageVersion);
+        } else {
+          console.error(
+            'ERROR: Package not found from package.json.\n' +
+              'Please specify version for the package in the format of `foo@1.2.3`',
+          );
+          return 1;
+        }
+      } else {
+        const [_, npmScope, pkgName, pkgVerStr] = termMatches;
+        const scopedPkgName = npmScope != null ? npmScope + pkgName : pkgName;
+        libdefsToSearchFor.set(scopedPkgName, pkgVerStr);
       }
-
-      const [_, npmScope, pkgName, pkgVerStr] = termMatches;
-      const scopedPkgName = npmScope != null ? npmScope + pkgName : pkgName;
-      libdefsToSearchFor.set(scopedPkgName, pkgVerStr);
     }
     console.log(`• Searching for ${libdefsToSearchFor.size} libdefs...`);
   } else {
     const pkgJsonData = await getPackageJsonData(cwd);
-    const pkgJsonDeps = getPackageJsonDependencies(pkgJsonData);
+    const pkgJsonDeps = getPackageJsonDependencies(pkgJsonData, ignoreDeps);
     for (const pkgName in pkgJsonDeps) {
       libdefsToSearchFor.set(pkgName, pkgJsonDeps[pkgName]);
     }
 
     if (libdefsToSearchFor.size === 0) {
       console.error(
-        "No dependencies were found in this project's package.json!"
+        "No dependencies were found in this project's package.json!",
       );
-      return 1;
+      return 0;
     }
 
     if (verbose) {
@@ -240,7 +261,7 @@ async function installNpmLibDefs({
     } else {
       console.log(
         `• Found ${libdefsToSearchFor.size} dependencies in package.json to ` +
-        `install libdefs for. Searching...`
+          `install libdefs for. Searching...`,
       );
     }
   }
@@ -248,28 +269,33 @@ async function installNpmLibDefs({
 
   // Search for the requested libdefs
   const libDefsToInstall: Map<string, NpmLibDef> = new Map();
-  const outdatedLibDefsToInstall: Array<[NpmLibDef, {name: string, ver: string}]> = [];
+  const outdatedLibDefsToInstall: [
+    NpmLibDef,
+    {name: string, ver: string},
+  ][] = [];
   const unavailableLibDefs = [];
-  await Promise.all(libDefsToSearchForEntries.map(async ([name, ver]) => {
-    if (FLOW_BUILT_IN_NPM_LIBS.indexOf(name) !== -1) {
-      return;
-    }
-
-    const libDef = await findNpmLibDef(name, ver, flowVersion);
-    if (libDef === null) {
-      unavailableLibDefs.push({name, ver});
-    } else {
-      libDefsToInstall.set(name, libDef);
-
-      // If the libdef is outdated (but still compatible), note this so we can
-      // warn the user
-      const libDefLower = getRangeLowerBound(libDef.version);
-      const depLower = getRangeLowerBound(ver);
-      if (semver.lt(libDefLower, depLower)) {
-        outdatedLibDefsToInstall.push([libDef, {name, ver}]);
+  await Promise.all(
+    libDefsToSearchForEntries.map(async ([name, ver]) => {
+      if (FLOW_BUILT_IN_NPM_LIBS.indexOf(name) !== -1) {
+        return;
       }
-    }
-  }));
+
+      const libDef = await findNpmLibDef(name, ver, flowVersion);
+      if (libDef === null) {
+        unavailableLibDefs.push({name, ver});
+      } else {
+        libDefsToInstall.set(name, libDef);
+
+        // If the libdef is outdated (but still compatible), note this so we can
+        // warn the user
+        const libDefLower = getRangeLowerBound(libDef.version);
+        const depLower = getRangeLowerBound(ver);
+        if (semver.lt(libDefLower, depLower)) {
+          outdatedLibDefsToInstall.push([libDef, {name, ver}]);
+        }
+      }
+    }),
+  );
 
   // Scan libdefs that are already installed
   const libDefsToUninstall = new Map();
@@ -277,42 +303,41 @@ async function installNpmLibDefs({
     path.join(flowProjectRoot),
     libdefDir,
   );
-  [...alreadyInstalledLibDefs.entries()].forEach(
-    ([filePath, npmLibDef]) => {
-      const fullFilePath = path.join(flowProjectRoot, filePath);
-      switch (npmLibDef.kind) {
-        case 'LibDef':
-          // If a libdef is already installed for some dependency, we need to
-          // uninstall it before installing the new (potentially updated) ver
-          const libDef = npmLibDef.libDef;
-          //const toInstall = libDefsToInstall.has(libDef.name);
-          //console.log(`Found ${libDef.name} already installed. Uninstall? ${toInstall != null ? 'yes' : 'no'}`);
-          if (libDefsToInstall.has(libDef.name)) {
-            libDefsToUninstall.set(libDef.name, fullFilePath);
-          }
-          break;
+  [...alreadyInstalledLibDefs.entries()].forEach(([filePath, npmLibDef]) => {
+    const fullFilePath = path.join(flowProjectRoot, filePath);
+    switch (npmLibDef.kind) {
+      case 'LibDef':
+        // If a libdef is already installed for some dependency, we need to
+        // uninstall it before installing the new (potentially updated) ver
+        const libDef = npmLibDef.libDef;
+        const scopedPkgName = getScopedPackageName(libDef);
+        if (libDefsToInstall.has(scopedPkgName)) {
+          libDefsToUninstall.set(scopedPkgName, fullFilePath);
+        }
+        break;
 
-        case 'Stub':
-          break;
+      case 'Stub':
+        break;
 
-        default:
-          (npmLibDef: empty);
-      }
+      default:
+        (npmLibDef: empty);
     }
-  );
+  });
 
   if (libDefsToInstall.size > 0) {
     console.log(`• Installing ${libDefsToInstall.size} libDefs...`);
     const flowTypedDirPath = path.join(flowProjectRoot, libdefDir, 'npm');
     await mkdirp(flowTypedDirPath);
     const results = await Promise.all(
-      [...libDefsToInstall.values()].map(async (def: NpmLibDef) => {
-        const toUninstall = libDefsToUninstall.get(def.name);
+      [...libDefsToInstall.values()].map(async (libDef: NpmLibDef) => {
+        const toUninstall = libDefsToUninstall.get(
+          getScopedPackageName(libDef),
+        );
         if (toUninstall != null) {
           await fs.unlink(toUninstall);
         }
-        return installNpmLibDef(def, flowTypedDirPath, overwrite);
-      })
+        return installNpmLibDef(libDef, flowTypedDirPath, overwrite);
+      }),
     );
 
     if (results.some(res => !res)) {
@@ -320,44 +345,53 @@ async function installNpmLibDefs({
     }
   }
 
-  if ((verbose || unavailableLibDefs.length === 0)
-      && outdatedLibDefsToInstall.length > 0) {
+  if (
+    (verbose || unavailableLibDefs.length === 0) &&
+    outdatedLibDefsToInstall.length > 0
+  ) {
     console.log(
-      "• The following installed libdefs are compatible with your " +
-      "dependencies, but may not include all minor and patch changes for " +
-      "your specific dependency version:\n"
+      '• The following installed libdefs are compatible with your ' +
+        'dependencies, but may not include all minor and patch changes for ' +
+        'your specific dependency version:\n',
     );
-    outdatedLibDefsToInstall.forEach(([libDef, {name: pkgName, ver: pkgVersion}]) => {
-      console.log(
-        "  • libdef: %s (satisfies %s)",
-        colors.yellow(`${libDef.name}_${libDef.version}`),
-        colors.bold(`${pkgName}@${pkgVersion}`),
-      );
+    outdatedLibDefsToInstall.forEach(
+      ([libDef, {name: pkgName, ver: pkgVersion}]) => {
+        console.log(
+          '  • libdef: %s (satisfies %s)',
+          colors.yellow(`${libDef.name}_${libDef.version}`),
+          colors.bold(`${pkgName}@${pkgVersion}`),
+        );
 
-      const libDefPlural =
-        outdatedLibDefsToInstall.length > 1
-        ? ["versioned updates", "these packages"]
-        : ["a versioned update", "this package"];
-      console.log(
-        `\n` +
-        `  Consider submitting ${libDefPlural[0]} for ${libDefPlural[1]} to \n` +
-        `  https://github.com/flowtype/flow-typed/\n`
-      );
-    });
+        const libDefPlural =
+          outdatedLibDefsToInstall.length > 1
+            ? ['versioned updates', 'these packages']
+            : ['a versioned update', 'this package'];
+        console.log(
+          `\n` +
+            `  Consider submitting ${libDefPlural[0]} for ${
+              libDefPlural[1]
+            } to \n` +
+            `  https://github.com/flowtype/flow-typed/\n`,
+        );
+      },
+    );
   }
 
-  if (unavailableLibDefs.length > 0
-      && unavailableLibDefs.length === explicitLibDefs.length) {
+  if (
+    unavailableLibDefs.length > 0 &&
+    unavailableLibDefs.length === explicitLibDefs.length
+  ) {
     // If the user specified an explicit library to be installed, don't generate
     // a stub if no libdef exists -- just inform them that one doesn't exist
     console.log(
       colors.red(
-        `!! No libdefs found in flow-typed for the explicitly requested libdefs. !!`
+        `!! No flow@${flowVersionToSemver(flowVersion)}-compatible libdefs ` +
+          `found in flow-typed for the explicitly requested libdefs. !!`,
       ) +
-      "\n" +
-      "\n" +
-      "Consider using `%s` to generate an empty libdef that you can fill in.",
-      colors.bold(`flow-typed create-stub ${explicitLibDefs.join(' ')}`)
+        '\n' +
+        '\n' +
+        'Consider using `%s` to generate an empty libdef that you can fill in.',
+      colors.bold(`flow-typed create-stub ${explicitLibDefs.join(' ')}`),
     );
 
     return 1;
@@ -366,14 +400,16 @@ async function installNpmLibDefs({
     // we'll skip generating a stub for it.
     const untypedMissingLibDefs = [];
     const typedMissingLibDefs = [];
-    await Promise.all(unavailableLibDefs.map(async ({name: pkgName, ver: pkgVer}) => {
-      const hasFlowFiles = await pkgHasFlowFiles(cwd, pkgName);
-      if (hasFlowFiles) {
-        typedMissingLibDefs.push([pkgName, pkgVer]);
-      } else {
-        untypedMissingLibDefs.push([pkgName, pkgVer]);
-      }
-    }));
+    await Promise.all(
+      unavailableLibDefs.map(async ({name: pkgName, ver: pkgVer}) => {
+        const hasFlowFiles = await pkgHasFlowFiles(cwd, pkgName);
+        if (hasFlowFiles) {
+          typedMissingLibDefs.push([pkgName, pkgVer]);
+        } else {
+          untypedMissingLibDefs.push([pkgName, pkgVer]);
+        }
+      }),
+    );
 
     if (untypedMissingLibDefs.length > 0 && !skip) {
       console.log('• Generating stubs for untyped dependencies...');
@@ -383,27 +419,31 @@ async function installNpmLibDefs({
             flowProjectRoot,
             pkgName,
             pkgVerStr,
-            true, /*ovewrite*/
-            libdefDir
+            overwrite,
+            libdefDir,
           );
-        })
+        }),
       );
 
-      console.log(colors.red(
-        `\n!! No flow@${flowVersionToSemver(flowVersion)}-compatible libdefs ` +
-        `found in flow-typed for the above untyped dependencies !!`
-      ));
+      console.log(
+        colors.red(
+          `\n!! No flow@${flowVersionToSemver(
+            flowVersion,
+          )}-compatible libdefs ` +
+            `found in flow-typed for the above untyped dependencies !!`,
+        ),
+      );
 
       const plural =
         unavailableLibDefs.length > 1
-        ? ['libdefs', 'these packages', 'them']
-        : ['a libdef', 'this package', 'it'];
+          ? ['libdefs', 'these packages', 'them']
+          : ['a libdef', 'this package', 'it'];
       console.log(
         `\n` +
-        `I've generated ${'`'}any${'`'}-typed stubs for ${plural[1]}, but ` +
-        `consider submitting \n` +
-        `${plural[0]} for ${plural[2]} to ` +
-        `${colors.bold('https://github.com/flowtype/flow-typed/')}\n`
+          `I've generated ${'`'}any${'`'}-typed stubs for ${plural[1]}, but ` +
+          `consider submitting \n` +
+          `${plural[0]} for ${plural[2]} to ` +
+          `${colors.bold('https://github.com/flowtype/flow-typed/')}\n`,
       );
     }
   }
@@ -417,9 +457,7 @@ async function installNpmLibDef(
   overwrite: boolean,
 ): Promise<boolean> {
   const scopedDir =
-    npmLibDef.scope === null
-    ? npmDir
-    : path.join(npmDir, npmLibDef.scope);
+    npmLibDef.scope === null ? npmDir : path.join(npmDir, npmLibDef.scope);
   mkdirp(scopedDir);
 
   const fileName = `${npmLibDef.name}_${npmLibDef.version}.js`;
@@ -429,19 +467,23 @@ async function installNpmLibDef(
   try {
     const terseFilePath = path.relative(
       path.resolve(npmDir, '..', '..'),
-      filePath
+      filePath,
     );
 
     if (!overwrite && (await fs.exists(filePath))) {
       console.error(
-        "  • %s\n" +
-        "    └> %s",
-
-        colors.bold(colors.red(
-          `${terseFilePath} already exists and appears to have been manually ` +
-          `written or changed!`
-        )),
-        "Use --overwrite to overwrite the existing libdef.",
+        '  • %s\n' + '    %s\n    %s\n    └> %s',
+        colors.bold(
+          colors.red(
+            `${terseFilePath} already exists and appears to have been manually ` +
+              `written or changed!`,
+          ),
+        ),
+        colors.green(
+          `Consider contributing your changes back to flow-typed repository :)`,
+        ),
+        `Read more at https://github.com/flowtype/flow-typed/wiki/Contributing-Library-Definitions`,
+        'Use --overwrite to overwrite the existing libdef.',
       );
       return true;
     }
@@ -454,12 +496,9 @@ async function installNpmLibDef(
     await copyFile(npmLibDef.path, filePath, codeSignPreprocessor);
 
     console.log(
-      colors.bold(
-        "  • %s\n" +
-        "    └> %s"
-      ),
+      colors.bold('  • %s\n' + '    └> %s'),
       fileName,
-      colors.green(`.${path.sep}${terseFilePath}`)
+      colors.green(`.${path.sep}${terseFilePath}`),
     );
 
     // Remove any lingering stubs
